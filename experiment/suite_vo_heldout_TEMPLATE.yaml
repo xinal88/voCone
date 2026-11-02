@@ -1,0 +1,30 @@
+# One suite per pedestrian driver, since `launch` is run-wide. Copy to suite_vo_<driver>.yaml.
+launch:
+  human: socialgail            # TODO: confirm launch arg name/value (socialgail | nsp)
+references: true               # unhindered_peds reference steps -> ped_path_deflection_m
+metrics:
+  max_collisions: 1            # any contact fails the episode -> zero-contact success
+stages:
+  # TODO: three held-out scenario families x {15, 20} pedestrians; explicit seeds so every arm sees the same episodes
+  - name: famA_ped15
+    map: TODO_world_A
+    robot: jackal              # TODO: same robot as the backbone run
+    tm_robots: random
+    tm_obstacles: random
+    episodes: 100
+    seed: 1015
+    timeout: 120s
+    config:
+      random:
+        dynamic: {min: 15, max: 15, models: [arenian]}
+  - name: famA_ped20
+    map: TODO_world_A
+    robot: jackal
+    tm_robots: random
+    tm_obstacles: random
+    episodes: 100
+    seed: 1020
+    timeout: 120s
+    config:
+      random:
+        dynamic: {min: 20, max: 20, models: [arenian]}

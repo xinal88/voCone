@@ -1,0 +1,28 @@
+diff --git a/configs/observations/manipulator.yaml b/configs/observations/manipulator.yaml
+index 545202a..8d21909 100644
+--- a/configs/observations/manipulator.yaml
++++ b/configs/observations/manipulator.yaml
+@@ -276,6 +276,9 @@ datasources:
+   crowd_ttc:
+     type: CrowdTimeToContactGenerator      # Time to contact against the measured robot velocity
+ 
++  crowd_vo:
++    type: CrowdVelocityObstacleConeGenerator  # Per-heading velocity-obstacle cone at the measured speed
++
+ # =============================================================================
+ # CONFIGURATION EXAMPLES & USAGE PATTERNS
+ # =============================================================================
+diff --git a/configs/observations/observations.yaml b/configs/observations/observations.yaml
+index dd5f9eb..2b0ab91 100644
+--- a/configs/observations/observations.yaml
++++ b/configs/observations/observations.yaml
+@@ -249,6 +249,9 @@ datasources:
+   crowd_ttc:
+     type: CrowdTimeToContactGenerator      # Time to contact against the measured robot velocity
+ 
++  crowd_vo:
++    type: CrowdVelocityObstacleConeGenerator  # Per-heading velocity-obstacle cone at the measured speed
++
+ # =============================================================================
+ # CONFIGURATION EXAMPLES & USAGE PATTERNS
+ # =============================================================================

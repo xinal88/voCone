@@ -1,0 +1,472 @@
+diff --git a/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/feature_extractors/resnet/resnet.py b/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/feature_extractors/resnet/resnet.py
+index a777b36..d4cdd0b 100644
+--- a/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/feature_extractors/resnet/resnet.py
++++ b/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/feature_extractors/resnet/resnet.py
+@@ -29,6 +29,7 @@ from rosnav_rl.spaces.observation_space.spaces.dynamics import (
+ )
+ from rosnav_rl.spaces.observation_space.spaces.environment import (
+     CrowdTimeToContactSpace,
++    CrowdVelocityObstacleConeSpace,
+     PedestrianSocialStateSpace,
+     PedestrianTypeSpace,
+     PedestrianVelXSpace,
+@@ -1518,7 +1519,10 @@ class DRL_VO_ROSNAV_EXTRACTOR(RESNET_MID_FUSION_EXTRACTOR_1):
+ class DRL_VO_ROSNAV_SCALAR_EXTRACTOR(DRL_VO_ROSNAV_EXTRACTOR):
+     """DRL_VO_ROSNAV_EXTRACTOR with the scalar spaces in SCALAR_SPACES appended to the robot state of the head."""
+ 
+-    SCALAR_SPACES: ClassVar[tuple[str, ...]] = (CrowdTimeToContactSpace.name,)
++    SCALAR_SPACES: ClassVar[tuple[str, ...]] = (
++        CrowdTimeToContactSpace.name,
++        CrowdVelocityObstacleConeSpace.name,
++    )
+ 
+     def _get_input_sizes(self):
+         super()._get_input_sizes()
+diff --git a/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/sb3_policy/paper.py b/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/sb3_policy/paper.py
+index ed83c6f..0751410 100644
+--- a/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/sb3_policy/paper.py
++++ b/rosnav_rl/rosnav_rl/model/stable_baselines3/policy/sb3_policy/paper.py
+@@ -274,6 +274,14 @@ class AGENT_5_TTC(AGENT_5):
+     features_extractor_class = DRL_VO_ROSNAV_SCALAR_EXTRACTOR
+ 
+ 
++@AgentFactory.register("AGENT_5_VO")
++class AGENT_5_VO(AGENT_5):
++    """AGENT_5 plus the crowd velocity-obstacle cone scalars in the head."""
++
++    observation_spaces = [*AGENT_5.observation_spaces, spaces.environment.CrowdVelocityObstacleConeSpace]
++    features_extractor_class = DRL_VO_ROSNAV_SCALAR_EXTRACTOR
++
++
+ @AgentFactory.register("AGENT_6")
+ class AGENT_6(StableBaselinesPolicyDescription):
+     """
+diff --git a/rosnav_rl/rosnav_rl/observations/data_sources/generators.py b/rosnav_rl/rosnav_rl/observations/data_sources/generators.py
+index 2fdad62..fca0161 100644
+--- a/rosnav_rl/rosnav_rl/observations/data_sources/generators.py
++++ b/rosnav_rl/rosnav_rl/observations/data_sources/generators.py
+@@ -34,6 +34,7 @@ from ..utils.types import (
+     ArenaPedestrianDetections,
+     ArenaPedestrianStates,
+     CrowdTimeToContact,
++    CrowdVelocityObstacleCone,
+     DistanceAngleMetrics,
+     GoalLocation,
+     LidarRanges,
+@@ -1459,3 +1460,61 @@ class CrowdTimeToContactGenerator(Generator[CrowdTimeToContact]):
+         out[2] = float(np.count_nonzero(ttc < self.imminent))
+         out[3] = ttc[ahead].min() if ahead.any() else self.horizon
+         return out
++
++
++class CrowdVelocityObstacleConeGenerator(Generator[CrowdVelocityObstacleCone]):
++    """Velocity-obstacle cone: per heading at the measured speed (floored at `min_speed`), the largest `1 - t / horizon` over pedestrians in contact before `horizon`."""
++
++    requires = {
++        "pedestrian_relative_locations": PedestrianRelativeLocations,
++        "pedestrian_relative_velocities": PedestrianRelativeVelocities,
++        "robot_twist": RobotVelocity,
++    }
++
++    def __init__(
++        self,
++        name: str,
++        pedestrian_radius: float = 0.3,
++        horizon: float = 5.0,
++        max_range: float = 12.0,
++        num_headings: int = 16,
++        min_speed: float = 0.3,
++        **kwargs: Any,
++    ):
++        super().__init__(name, **kwargs)
++        self.pedestrian_radius = pedestrian_radius
++        self.horizon = horizon
++        self.max_range = max_range
++        self.num_headings = num_headings
++        self.min_speed = min_speed
++        angles = 2.0 * np.pi * np.arange(num_headings) / num_headings
++        self._headings = np.stack((np.cos(angles), np.sin(angles)), axis=1)
++
++    def _generate(
++        self,
++        pedestrian_relative_locations: PedestrianRelativeLocations,
++        pedestrian_relative_velocities: PedestrianRelativeVelocities,
++        robot_twist: RobotVelocity,
++        simulation_state_container: AgentParameters,
++        **kwargs: Any,
++    ) -> CrowdVelocityObstacleCone:
++        out = np.zeros(self.num_headings, dtype=np.float32)
++        if len(pedestrian_relative_locations) == 0 or len(pedestrian_relative_velocities) == 0:
++            return out
++        positions = np.asarray(pedestrian_relative_locations, dtype=np.float64).reshape(-1, 2)
++        velocities = np.asarray(pedestrian_relative_velocities, dtype=np.float64).reshape(-1, 2)
++        in_range = np.hypot(positions[:, 0], positions[:, 1]) <= self.max_range
++        positions, velocities = positions[in_range], velocities[in_range]
++        if len(positions) == 0:
++            return out
++        speed = max(float(np.hypot(robot_twist[0], robot_twist[1])), self.min_speed)
++        relative = velocities[None, :, :] - speed * self._headings[:, None, :]
++        ttc = time_to_contact(
++            np.broadcast_to(positions, relative.shape).reshape(-1, 2),
++            relative.reshape(-1, 2),
++            contact_radius=simulation_state_container.robot_radius + self.pedestrian_radius,
++            horizon=self.horizon,
++        ).reshape(self.num_headings, -1)
++        blocked = np.where(ttc < self.horizon, 1.0 - ttc / self.horizon, 0.0)
++        out[:] = blocked.max(axis=1)
++        return out
+diff --git a/rosnav_rl/rosnav_rl/observations/observations.yaml b/rosnav_rl/rosnav_rl/observations/observations.yaml
+index cc379dc..7b8dc21 100644
+--- a/rosnav_rl/rosnav_rl/observations/observations.yaml
++++ b/rosnav_rl/rosnav_rl/observations/observations.yaml
+@@ -250,6 +250,9 @@ datasources:
+   crowd_ttc:
+     type: CrowdTimeToContactGenerator      # Time to contact against the measured robot velocity
+ 
++  crowd_vo:
++    type: CrowdVelocityObstacleConeGenerator  # Per-heading velocity-obstacle cone at the measured speed
++
+ # =============================================================================
+ # CONFIGURATION EXAMPLES & USAGE PATTERNS
+ # =============================================================================
+diff --git a/rosnav_rl/rosnav_rl/observations/utils/types.py b/rosnav_rl/rosnav_rl/observations/utils/types.py
+index bb0a0c6..6fd9184 100644
+--- a/rosnav_rl/rosnav_rl/observations/utils/types.py
++++ b/rosnav_rl/rosnav_rl/observations/utils/types.py
+@@ -316,6 +316,18 @@ CrowdTimeToContact = Annotated[
+     ),
+ ]
+ 
++CrowdVelocityObstacleCone = Annotated[
++    np.ndarray,
++    DataSpec(
++        description="Velocity-obstacle cone: how soon each heading at the current speed contacts a pedestrian",
++        shape="(H,)",
++        units="unitless, 1 - time to contact / horizon",
++        source="pedestrian relative states and the measured robot speed",
++        constraints="H = number of headings, heading k at 2 pi k / H counterclockwise from forward, values in [0, 1], 0 when free",
++        example="[0.8, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6]",
++    ),
++]
++
+ # Additional encoded output types for observation spaces
+ MotionStateVector = Annotated[
+     np.ndarray,
+@@ -605,6 +617,7 @@ __all__ = [
+     "PedestrianTypeArray",
+     "PedestrianSocialStates",
+     "CrowdTimeToContact",
++    "CrowdVelocityObstacleCone",
+     "MotionStateVector",
+     "KinematicStateVector",
+     "TrajectoryStateVector",
+diff --git a/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/__init__.py b/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/__init__.py
+index ef630d6..dea2abe 100644
+--- a/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/__init__.py
++++ b/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/__init__.py
+@@ -17,6 +17,7 @@ Feature Map Spaces:
+ 
+ Crowd Scalar Spaces:
+     - CrowdTimeToContactSpace: Crowd time-to-contact summary
++    - CrowdVelocityObstacleConeSpace: Crowd velocity-obstacle cone per heading
+ """
+ 
+ from .advanced_environment_spaces import (
+@@ -24,7 +25,7 @@ from .advanced_environment_spaces import (
+     ObstacleProximitySpace,
+     SpatialAwarenessSpace,
+ )
+-from .crowd_spaces import CrowdTimeToContactSpace
++from .crowd_spaces import CrowdTimeToContactSpace, CrowdVelocityObstacleConeSpace
+ from .feature_map_spaces import (
+     LaserCartesianMapSpace,
+     PedestrianLocationSpace,
+@@ -47,4 +48,5 @@ __all__ = [
+     "SpatialAwarenessSpace",
+     "ObstacleProximitySpace",
+     "CrowdTimeToContactSpace",
++    "CrowdVelocityObstacleConeSpace",
+ ]
+diff --git a/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/crowd_spaces.py b/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/crowd_spaces.py
+index 098c1af..835a1fc 100644
+--- a/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/crowd_spaces.py
++++ b/rosnav_rl/rosnav_rl/spaces/observation_space/spaces/environment/crowd_spaces.py
+@@ -5,7 +5,7 @@ from typing import Any
+ import numpy as np
+ from gymnasium import spaces
+ 
+-from rosnav_rl.observations.utils.types import CrowdTimeToContact
++from rosnav_rl.observations.utils.types import CrowdTimeToContact, CrowdVelocityObstacleCone
+ from rosnav_rl.spaces.observation_space.observation_space_factory import SpaceFactory
+ from rosnav_rl.spaces.observation_space.space_categories import SpaceCategory
+ from rosnav_rl.spaces.observation_space.spaces.base_observation_space import BaseObservationSpace
+@@ -33,3 +33,24 @@ class CrowdTimeToContactSpace(BaseObservationSpace):
+     @BaseObservationSpace.apply_normalization
+     def encode_observation(self, crowd_ttc: CrowdTimeToContact, *args: Any, **kwargs: Any) -> CrowdTimeToContact:
+         return np.clip(np.asarray(crowd_ttc, dtype=np.float32), self._space.low, self._space.high)
++
++
++@SpaceFactory.register(auto_name=True, category=SpaceCategory.ENVIRONMENT)
++class CrowdVelocityObstacleConeSpace(BaseObservationSpace):
++    """Velocity-obstacle cone: how soon each heading at the current speed contacts a pedestrian, 0 when free."""
++
++    name = "CrowdVelocityObstacleConeSpace"
++    requires = {"crowd_vo": CrowdVelocityObstacleCone}
++
++    def __init__(self, vo_num_headings: int = 16, *args: Any, **kwargs: Any) -> None:
++        self._num_headings = vo_num_headings
++        super().__init__(*args, **kwargs)
++
++    def get_gym_space(self) -> spaces.Space:
++        return spaces.Box(low=0.0, high=1.0, shape=(self._num_headings,), dtype=np.float32)
++
++    @BaseObservationSpace.apply_normalization
++    def encode_observation(
++        self, crowd_vo: CrowdVelocityObstacleCone, *args: Any, **kwargs: Any
++    ) -> CrowdVelocityObstacleCone:
++        return np.clip(np.asarray(crowd_vo, dtype=np.float32), self._space.low, self._space.high)
+diff --git a/rosnav_rl/rosnav_rl/spaces/space_manager/mirror_space_manager.py b/rosnav_rl/rosnav_rl/spaces/space_manager/mirror_space_manager.py
+index ed22771..cd9a429 100644
+--- a/rosnav_rl/rosnav_rl/spaces/space_manager/mirror_space_manager.py
++++ b/rosnav_rl/rosnav_rl/spaces/space_manager/mirror_space_manager.py
+@@ -11,6 +11,7 @@ from rosnav_rl.utils.type_aliases import ObservationDict
+ from ..observation_space.spaces.dynamics import LastActionSpace
+ from ..observation_space.spaces.environment import (
+     CrowdTimeToContactSpace,
++    CrowdVelocityObstacleConeSpace,
+     LaserCartesianMapSpace,
+     PedestrianLocationSpace,
+     PedestrianSocialStateSpace,
+@@ -70,6 +71,16 @@ def _identity(observation: np.ndarray) -> np.ndarray:
+     return observation
+ 
+ 
++def _mirrored_headings(num_headings: int) -> Callable[[np.ndarray], np.ndarray]:
++    """Heading k at 2 pi k / H swaps with heading -k."""
++    partner = np.mod(-np.arange(num_headings), num_headings)
++
++    def reflect(observation: np.ndarray) -> np.ndarray:
++        return np.ascontiguousarray(observation[..., partner])
++
++    return reflect
++
++
+ class MirrorSpaceManager(BaseSpaceManager):
+     """Reflects observations and the commands decoded from them across the robot's forward axis."""
+ 
+@@ -122,6 +133,8 @@ class MirrorSpaceManager(BaseSpaceManager):
+             return self._checked_negate(name, space, tuple(range(1, space.shape[-1])))
+         if name == CrowdTimeToContactSpace.name:
+             return _identity
++        if name == CrowdVelocityObstacleConeSpace.name:
++            return _mirrored_headings(space.shape[-1])
+         raise ValueError(f"no reflection rule for observation space '{name}'")
+ 
+     @staticmethod
+diff --git a/rosnav_rl/tests/test_crowd_velocity_obstacle_cone.py b/rosnav_rl/tests/test_crowd_velocity_obstacle_cone.py
+new file mode 100644
+index 0000000..a712c74
+--- /dev/null
++++ b/rosnav_rl/tests/test_crowd_velocity_obstacle_cone.py
+@@ -0,0 +1,166 @@
++"""Tests for the crowd velocity-obstacle cone pipeline: generator, space and AGENT_5_VO."""
++
++from __future__ import annotations
++
++import importlib.resources
++
++import numpy as np
++import pytest
++import torch
++import yaml
++
++from rosnav_rl.cfg.action_spaces import DifferentialDriveActionSpace
++from rosnav_rl.cfg.agent import AgentConfig
++from rosnav_rl.cfg.parameters import AgentParameters
++from rosnav_rl.model.stable_baselines3.cfg import PPO_Cfg, StableBaselinesCfg
++from rosnav_rl.model.stable_baselines3.cfg.ppo import PPO_Algorithm_Cfg
++from rosnav_rl.observations.data_sources.generators import (
++    CrowdTimeToContactGenerator,
++    CrowdVelocityObstacleConeGenerator,
++)
++from rosnav_rl.rl_agent import RL_Agent
++from rosnav_rl.spaces.observation_space.spaces.environment import CrowdVelocityObstacleConeSpace
++from rosnav_rl.utils.utils import make_mock_env
++
++PARAMS = AgentParameters(robot_radius=0.4)
++HEADINGS = 16
++MIRROR = np.mod(-np.arange(HEADINGS), HEADINGS)
++
++
++def _vo(locations, velocities, twist=(0.0, 0.0, 0.0), **kwargs):
++    return CrowdVelocityObstacleConeGenerator(name="crowd_vo", **kwargs)._generate(
++        np.asarray(locations, dtype=np.float32),
++        np.asarray(velocities, dtype=np.float32),
++        np.asarray(twist, dtype=np.float32),
++        PARAMS,
++    )
++
++
++def test_no_pedestrians_leaves_every_heading_free():
++    out = _vo(np.empty((0, 2)), np.empty((0, 2)))
++
++    assert out.shape == (HEADINGS,)
++    assert out.tolist() == [0.0] * HEADINGS
++
++
++def test_a_standing_pedestrian_ahead_blocks_only_the_forward_heading_at_the_speed_floor():
++    out = _vo([[2.0, 0.0]], [[0.0, 0.0]])
++
++    expected = np.zeros(HEADINGS)
++    expected[0] = 1.0 - ((2.0 - 0.7) / 0.3) / 5.0
++    np.testing.assert_allclose(out, expected, atol=1e-5)
++
++
++def test_the_measured_speed_brings_a_far_pedestrian_inside_the_horizon():
++    standing = _vo([[4.7, 0.0]], [[0.0, 0.0]])
++    driving = _vo([[4.7, 0.0]], [[0.0, 0.0]], twist=(1.0, 0.0, 0.0))
++
++    assert standing[0] == 0.0
++    assert driving[0] == pytest.approx(1.0 - 4.0 / 5.0, abs=1e-5)
++
++
++def test_an_oncoming_pedestrian_blocks_ahead_harder_than_behind():
++    out = _vo([[4.0, 0.0]], [[-1.0, 0.0]])
++
++    assert out[0] == pytest.approx(1.0 - (3.3 / 1.3) / 5.0, abs=1e-5)
++    assert out[8] == pytest.approx(1.0 - (3.3 / 0.7) / 5.0, abs=1e-5)
++    assert out[4] == 0.0 and out[12] == 0.0
++
++
++def test_pedestrians_beyond_the_range_are_ignored():
++    out = _vo([[13.0, 0.0]], [[-10.0, 0.0]])
++
++    assert not out.any()
++
++
++def test_a_pedestrian_in_contact_blocks_every_heading():
++    out = _vo([[0.5, 0.0]], [[0.0, 0.0]])
++
++    np.testing.assert_allclose(out, np.ones(HEADINGS))
++
++
++@pytest.mark.parametrize(("heading", "twist"), [(0, (0.8, 0.0, 0.0)), (4, (0.0, 0.8, 0.0)), (8, (-0.8, 0.0, 0.0))])
++def test_the_heading_of_travel_reads_the_time_to_contact_of_the_measured_velocity(heading, twist):
++    rng = np.random.default_rng(heading)
++    locations = rng.uniform(-6.0, 6.0, (8, 2))
++    velocities = rng.uniform(-1.2, 1.2, (8, 2))
++
++    cone = _vo(locations, velocities, twist=twist)
++    ttc = CrowdTimeToContactGenerator(name="crowd_ttc", horizon=5.0)._generate(
++        locations, velocities, np.asarray(twist), PARAMS
++    )
++
++    assert cone[heading] == pytest.approx(1.0 - ttc[0] / 5.0, abs=1e-5)
++
++
++def test_a_scene_mirrored_across_the_forward_axis_mirrors_the_headings():
++    rng = np.random.default_rng(7)
++    locations = rng.uniform(-6.0, 6.0, (10, 2))
++    velocities = rng.uniform(-1.2, 1.2, (10, 2))
++    flip = np.array([1.0, -1.0])
++
++    out = _vo(locations, velocities, twist=(0.6, 0.2, 0.0))
++    mirrored = _vo(locations * flip, velocities * flip, twist=(0.6, -0.2, 0.0))
++
++    assert out.any()
++    np.testing.assert_allclose(mirrored, out[MIRROR], atol=1e-6)
++
++
++def test_space_clips_into_the_unit_box_and_normalizes():
++    space = CrowdVelocityObstacleConeSpace(normalize=False)
++    raw = np.linspace(-0.5, 1.5, HEADINGS, dtype=np.float32)
++
++    encoded = space.encode_observation(raw)
++
++    assert space.space.shape == (HEADINGS,)
++    np.testing.assert_allclose(encoded, np.clip(raw, 0.0, 1.0), atol=1e-6)
++    normalized = CrowdVelocityObstacleConeSpace(normalize=True).encode_observation(raw)
++    assert normalized.min() >= -1.0 and normalized.max() <= 1.0
++    assert normalized[0] < normalized[-1]
++
++
++def _vo_agent() -> RL_Agent:
++    return RL_Agent(
++        AgentConfig(
++            name="vo_agent",
++            action_space=DifferentialDriveActionSpace(linear_range=(-0.5, 1.0), angular_range=(-1.0, 1.0)),
++            parameters=AgentParameters(laser_num_beams=720, robot_radius=0.4),
++            framework=StableBaselinesCfg(
++                algorithm=PPO_Cfg(architecture_name="AGENT_5_VO", parameters=PPO_Algorithm_Cfg(device="cpu"))
++            ),
++        )
++    )
++
++
++def test_bundled_observations_provide_what_the_vo_agent_requires():
++    agent = _vo_agent()
++    config = yaml.safe_load((importlib.resources.files("rosnav_rl") / "observations" / "observations.yaml").read_text())
++    provided = (set(config["datasources"]) - set(config["aliases"].values())) | set(config["aliases"]) | {"is_terminal"}
++
++    required = {
++        key for keys in agent.space_manager.observation_space_manager.required_observations.values() for key in keys
++    }
++
++    assert required <= provided
++    assert config["datasources"]["crowd_vo"]["type"] == "CrowdVelocityObstacleConeGenerator"
++
++
++def test_vo_agent_head_reads_the_scalars_next_to_the_robot_state():
++    agent = _vo_agent()
++    agent.initialize_model(make_mock_env(ns="", space_manager=agent.space_manager))
++    extractor = agent.model.model.policy.features_extractor
++    observation = {
++        key: np.zeros((1, *space.shape), dtype=np.float32)
++        for key, space in agent.space_manager.observation_space.spaces.items()
++    }
++
++    blocked = dict(observation, CrowdVelocityObstacleConeSpace=np.ones((1, HEADINGS), dtype=np.float32))
++
++    extractor.eval()
++    with torch.no_grad():
++        free_features = extractor({k: torch.as_tensor(v) for k, v in observation.items()})
++        blocked_features = extractor({k: torch.as_tensor(v) for k, v in blocked.items()})
++
++    assert "CrowdTimeToContactSpace" not in agent.space_manager.observation_space.spaces
++    assert extractor._last_action_size == agent.space_manager.observation_space["LastActionSpace"].shape[-1] + HEADINGS
++    assert not torch.allclose(free_features, blocked_features)
+diff --git a/rosnav_rl/tests/test_mirror_space_manager.py b/rosnav_rl/tests/test_mirror_space_manager.py
+index 0d414ef..3c91245 100644
+--- a/rosnav_rl/tests/test_mirror_space_manager.py
++++ b/rosnav_rl/tests/test_mirror_space_manager.py
+@@ -22,6 +22,8 @@ from rosnav_rl.spaces.space_manager.mirror_space_manager import mirrored_beams
+ BEAMS = 720
+ ANGLE_MIN = -np.pi
+ INCREMENT = 2 * np.pi / BEAMS
++HEADING_CONE = np.linspace(0.0, 0.9, 16, dtype=np.float32)
++HEADING_MIRROR = np.mod(-np.arange(16), 16)
+ PEDESTRIAN_MAPS = ("PedestrianVelXSpace", "PedestrianVelYSpace", "PedestrianTypeSpace", "PedestrianSocialStateSpace")
+ 
+ 
+@@ -66,6 +68,7 @@ def _scene(sign: float = 1.0) -> dict:
+         "dist_angle_to_subgoal": np.array([3.0, 0.6 * sign], dtype=np.float32),
+         "last_action": np.array([0.5, 0.3 * sign], dtype=np.float32),
+         "crowd_ttc": np.array([2.0, 5.0, 1.0, 2.0], dtype=np.float32),
++        "crowd_vo": HEADING_CONE if sign > 0 else HEADING_CONE[HEADING_MIRROR],
+     }
+ 
+ 
+@@ -74,9 +77,10 @@ def test_canonical_manager_is_selected_by_the_agent_config():
+     assert isinstance(RL_Agent(_spec("canonical")).space_manager, MirrorSpaceManager)
+ 
+ 
+-def test_nearest_pedestrian_on_the_right_reads_as_the_reflected_scene():
+-    mirrored = RL_Agent(_spec("canonical", "AGENT_5_TTC")).space_manager
+-    plain = RL_Agent(_spec("none", "AGENT_5_TTC")).space_manager
++@pytest.mark.parametrize("architecture", ["AGENT_5_TTC", "AGENT_5_VO"])
++def test_nearest_pedestrian_on_the_right_reads_as_the_reflected_scene(architecture: str):
++    mirrored = RL_Agent(_spec("canonical", architecture)).space_manager
++    plain = RL_Agent(_spec("none", architecture)).space_manager
+ 
+     encoded = mirrored.encode_observation(_scene())
+     expected = plain.encode_observation(_scene(sign=-1.0))
