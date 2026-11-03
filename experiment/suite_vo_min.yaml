@@ -1,0 +1,31 @@
+# Minimal held-out evaluation (PREREGISTRATION.md, decision 9): two held-out splits, default pedestrian driver.
+name: vo_min
+references: true               # unhindered_peds reference steps -> ped_path_deflection_m
+launch:
+  sim: gazebo                  # same simulator as training
+  headless: true
+  env.n: 1
+  optim.obstacles: bbox
+metrics:
+  max_collisions: 1            # any contact fails the episode -> zero-contact success
+stages:
+# Split A, crossing family on hospital_1 (unseen world, scripted crossings)
+- {name: crossing_s03, map: hospital_1, robot: jackal, episodes: 20, seed: 3003, timeout: 60.0,
+   tm_robots: scenario, tm_obstacles: scenario, config: {scenario: {file: s03_perpendicular_crossing}}}
+- {name: crossing_s07, map: hospital_1, robot: jackal, episodes: 20, seed: 3007, timeout: 60.0,
+   tm_robots: scenario, tm_obstacles: scenario, config: {scenario: {file: s07_crossing_pair}}}
+- {name: crossing_s08, map: hospital_1, robot: jackal, episodes: 20, seed: 3008, timeout: 75.0,
+   tm_robots: scenario, tm_obstacles: scenario, config: {scenario: {file: s08_crossing_group}}}
+# Split B, 20 pedestrians in the training world (training saw 1-3)
+- name: density_ped20
+  map: map_empty
+  robot: jackal
+  episodes: 60
+  seed: 2020
+  timeout: 120s
+  tm_robots: random
+  tm_obstacles: random
+  config:
+    random:
+      static: {min: 3, max: 5, models: [Hospital/SM_Chair_01a, Hospital/SM_BedSideTable_01b, Hospital/SM_TrashCan, Hospital/IV_Stand]}
+      dynamic: {min: 20, max: 20, models: [Common/Human/arenian]}

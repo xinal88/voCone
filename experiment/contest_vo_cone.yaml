@@ -1,7 +1,7 @@
 # Three arms, same suite, same episode seeds. `agent` is the trained agent folder name.
 - name: AGENT_5
-  mobile: {driver: rosnav_rl, agent: AGENT_5_vo_control}       # TODO: folder of the backbone run
+  mobile: {driver: rosnav_rl, agent: AGENT_5_vo_cone}
 - name: AGENT_5_TTC
-  mobile: {driver: rosnav_rl, agent: AGENT_5_TTC_vo_control}   # TODO: folder of the TTC control
+  mobile: {driver: rosnav_rl, agent: AGENT_5_TTC_vo_cone}
 - name: AGENT_5_VO
   mobile: {driver: rosnav_rl, agent: AGENT_5_VO_vo_cone}

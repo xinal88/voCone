@@ -10,7 +10,7 @@ with the reward unchanged.
 |---|---|
 | Implementation (rosnav-rl, Arena-Training) | **Done**, tested: [`patches/`](patches/) |
 | Training + evaluation setup | **Done**: [`experiment/`](experiment/), [`analysis/readout.py`](analysis/readout.py) |
-| Trained agents (AGENT_5_VO, AGENT_5, AGENT_5_TTC) | **Not run yet** |
+| Trained agents (AGENT_5_VO, AGENT_5, AGENT_5_TTC) | **Not run yet**; minimal run (VO + AGENT_5, 1M steps) set up |
 | Readout table with intervals, verdict | **Not run yet** (needs the trained agents) |
 | Seeds | Fixed in the configs: `seed: 42`, `env_seed: 42`; no run has used them yet |
 
@@ -71,7 +71,12 @@ by the group's backbone config and held-out list if supplied before evaluation.
   `sb_training_config.yaml`; the three arms differ only in agent name and `architecture_name`
   (checked by the script). 4M timesteps, success early stop off, seed 42, DRL-VO heading reward
   `active_heading_direction` on for all arms.
-- **Training**: `experiment/start_training.sh setup | prepare | train <ARM>`, AGENT_5_VO first.
+- **Training**: `experiment/start_training.sh setup | prepare | train <ARM> | evaluate`, AGENT_5_VO first.
+- **Minimal run** (decisions 7–9): AGENT_5_VO and AGENT_5 at 1M steps with a fixed curriculum schedule,
+  evaluated on two held-out splits (crossing family on `hospital_1`, 20 pedestrians):
+  `suite_vo_min.yaml`, `contest_vo_min.yaml`, `splits_min.yaml`. AGENT_5_TTC follows.
+- **Budget key**: the trainer reads `algorithm.parameters.total_timesteps` (default 10M) and ignores
+  `general.n_timesteps`, so the configs set `total_timesteps` explicitly.
 - **Evaluation**: one contest with the three arms (`contest_vo_cone.yaml`), one suite per pedestrian
   driver (`suite_vo_heldout_TEMPLATE.yaml`, explicit stage seeds, `max_collisions: 1`, `references: true`).
 - **Readout**: `analysis/readout.py` pairs episodes across arms by (stage, episode), reports every delta

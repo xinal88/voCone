@@ -47,6 +47,7 @@ agent_config:
         target_kl: 1.0  # Target KL divergence threshold (early stops policy updates if exceeded)
         tensorboard_log: tensorboard  # Directory for tensorboard logs (if None, no tensorboard logging)
         total_batch_size: 512  # Total batch size for training (across all environments; 192 × 3)
+        total_timesteps: 1000000  # training budget in control ticks
         use_sde: false  # Whether to use state-dependent exploration for action sampling
         verbose: 2  # Verbosity level (0: no output, 1: info, 2: debug)
         vf_coef: 0.22  # Coefficient for the value function loss in the total loss
@@ -106,7 +107,7 @@ arena_cfg:
     goal_radius: 0.5  # Radius within which the goal is considered reached
     max_num_moves_per_eps: 600  # Maximum number of steps per episode before termination
     n_envs: 2  # Number of parallel training environments
-    n_timesteps: 4000000  # Total number of timesteps to train for
+    n_timesteps: 1000000  # not read by the trainer, kept equal to total_timesteps
     no_gpu: false  # Set to true to force CPU training even if GPU is available
     safety_distance: 1.0  # Minimum distance to maintain from obstacles for safety
     show_progress_bar: false  # Display progress bar during training
@@ -137,6 +138,7 @@ arena_cfg:
       threshold_type: succ  # Metric to use: "succ" (success rate) or "rew" (reward)
       upper_threshold: 0.9  # Performance threshold to advance to next stage
       lower_threshold: 0.3  # Performance threshold to stay at current stage
+      stage_ticks: [0, 50000, 100000, 150000]  # fixed schedule, replaces the thresholds
 
       parameter_node_template: "/arena/env_{i}/task_generator_node"  # FQN of per-env task_generator node (set by arena_runtime registry)
       timeout: 5.0  # Timeout for ROS2 parameter service calls (seconds)
@@ -191,6 +193,7 @@ arena_cfg:
     training_metrics: true  # Display training performance metrics
 
   callbacks:
+    checkpoint_ticks: [250000, 500000, 750000]  # tick_<T>.zip snapshots
     periodic_evaluation:
       eval_freq: 100000  # Evaluation frequency (in timesteps * n_envs)
       max_num_moves_per_eps: 1200  # Maximum steps per evaluation episode

@@ -3,7 +3,8 @@
 #
 #   bash start_training.sh setup              # once, after Arena's install.sh: training feature, simulator, GPU
 #   bash start_training.sh prepare            # apply our patches, copy the arm configs into the workspace
-#   bash start_training.sh train AGENT_5_VO   # then AGENT_5, AGENT_5_TTC (same config, same seed)
+#   bash start_training.sh train AGENT_5_VO   # then AGENT_5 (minimal run), AGENT_5_TTC later
+#   bash start_training.sh evaluate           # minimal held-out benchmark, VO vs AGENT_5
 #
 # ARENA_WS_DIR points at the Arena workspace (default ../arena_ws). Run `train` inside tmux: one arm takes days. SIM and ROBOT must stay the same for every arm.
 set -euo pipefail
@@ -31,6 +32,7 @@ apply_once() {  # apply a patch unless it is already applied
 case "${1:-}" in
     setup)
         [ -e "$WS/arena" ] || { echo "no Arena workspace at $WS, run Arena's install.sh first" >&2; exit 1; }
+        git -C "$WS/src/Arena" submodule update --init --depth 1 arena_evaluation
         in_arena 'arena feature training install' "arena feature $SIM install" 'arena feature docker gpu on'
         ;;
     prepare)
@@ -49,8 +51,15 @@ case "${1:-}" in
         echo "training $arm on sim=$SIM robot=$ROBOT, log: $log"
         in_arena "arena train sim:=$SIM robot:=$ROBOT robot.mobile:=rosnav_rl train_config:=vo_cone_$arm.yaml" 2>&1 | tee "$log"
         ;;
+    evaluate)
+        BENCH=$WS/src/Arena/arena_evaluation/arena_evaluation/configs/benchmark
+        cp -v "$VO/experiment/suite_vo_min.yaml" "$BENCH/suites/vo_min.yaml"
+        cp -v "$VO/experiment/contest_vo_min.yaml" "$BENCH/contests/vo_min.yaml"
+        mkdir -p "$VO/experiment/logs"
+        in_arena 'arena evaluation benchmark --suite vo_min --contest vo_min' 2>&1 | tee "$VO/experiment/logs/eval_vo_min_$(date +%Y%m%d_%H%M).log"
+        ;;
     *)
-        sed -n '2,8p' "$0"
+        sed -n '2,9p' "$0"
         exit 1
         ;;
 esac

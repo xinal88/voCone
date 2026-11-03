@@ -1,0 +1,5 @@
+# Minimal run: the new arm and the backbone control. `agent` is the trained agent folder (agent_config.name).
+- name: AGENT_5_VO
+  mobile: {driver: rosnav_rl, agent: AGENT_5_VO_vo_cone}
+- name: AGENT_5
+  mobile: {driver: rosnav_rl, agent: AGENT_5_vo_cone}
